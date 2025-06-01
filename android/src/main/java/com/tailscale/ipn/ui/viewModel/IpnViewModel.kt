@@ -153,8 +153,21 @@ open class IpnViewModel : ViewModel() {
     val loginAction = {
       Client(viewModelScope).startLoginInteractive { result ->
         result
-            .onSuccess { TSLog.d(TAG, "Login started: $it") }
-            .onFailure { TSLog.e(TAG, "Error starting login: ${it.message}") }
+            .onSuccess {
+                TSLog.d(TAG, "[TEST-FLINK] Login started: $it")
+                try {
+                    TSLog.d(TAG, "[TEST-FLINK] Login result JSON: $it")
+                } catch (e: Exception) {
+                    TSLog.e(TAG, "[TEST-FLINK] Failed to serialize login result to JSON: ${e.message}")
+                }
+            }
+            .onFailure { TSLog.e(TAG, "[TEST-FLINK] Error starting login: ${it.message}") }
+        TSLog.d(TAG, "[TEST-FLINK] Login started: $result")
+        try {
+          TSLog.d(TAG, "[TEST-FLINK] Login result JSON: $result")
+        } catch (e: Exception) {
+          TSLog.e(TAG, "[TEST-FLINK] Failed to serialize login result to JSON: ${e.message}")
+        }
         completionHandler(result)
       }
     }

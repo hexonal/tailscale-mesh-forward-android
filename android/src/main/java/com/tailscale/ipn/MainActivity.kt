@@ -366,6 +366,7 @@ class MainActivity : ComponentActivity() {
     lifecycleScope.launch {
       Notifier.browseToURL.collect { url ->
         url?.let {
+          TSLog.d(TAG, "[TEST-FLINK] 收到 browseToURL: $it")
           when (useQRCodeLogin()) {
             false -> Dispatchers.Main.run { login(it) }
             true -> loginQRCode.set(it)
@@ -476,15 +477,17 @@ class MainActivity : ComponentActivity() {
 
     val url = urlString.toUri()
     try {
+      TSLog.d(TAG, "[TEST-FLINK] 尝试用 CustomTabs 打开浏览器: $url")
       val customTabsIntent = CustomTabsIntent.Builder().build()
       customTabsIntent.launchUrl(this, url)
     } catch (e: Exception) {
       // Fallback to a regular browser if CustomTabsIntent fails
       try {
+        TSLog.d(TAG, "[TEST-FLINK] fallback 用系统浏览器打开: $url")
         val fallbackIntent = Intent(Intent.ACTION_VIEW, url)
         startActivity(fallbackIntent)
       } catch (e: Exception) {
-        TSLog.e(TAG, "Login: failed to open browser: $e")
+        TSLog.e(TAG, "[TEST-FLINK] Login: failed to open browser: $e")
       }
     }
   }

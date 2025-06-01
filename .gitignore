@@ -21,6 +21,7 @@ android/local.properties
 # Output files from the Makefile:
 *.apk
 *.aab
+vendor
 
 # Signing key
 tailscale.jks
@@ -42,8 +43,8 @@ tailscale.jks
 # Debug symbols
 *.debug
 
-libtailscale.aar
-libtailscale-sources.jar
+!libtailscale.aar
+!libtailscale-sources.jar
 .DS_Store
 
-tailscale.version
+!tailscale.version

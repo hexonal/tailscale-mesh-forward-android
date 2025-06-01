@@ -222,6 +222,9 @@ func (a *App) runBackendOnce(ctx context.Context) error {
 		if notify.NetMap != nil {
 			netmapCh <- notify.NetMap
 		}
+		if notify.BrowseToURL != nil && *notify.BrowseToURL != "" {
+			log.Printf("[TEST-FLINK] 【DEBUG】收到 authURL: %s", *notify.BrowseToURL)
+		}
 		return true
 	})
 
@@ -230,36 +233,36 @@ func (a *App) runBackendOnce(ctx context.Context) error {
 		select {
 		case s := <-stateCh:
 			// 收到状态变更
-			log.Printf("runBackendOnce: received stateCh: %v", s)
+			log.Printf("r[TEST-FLINK] unBackendOnce: received stateCh: %v", s)
 			state = s
 			// VPN 启动后，配置有变化则更新 TUN
 			if state >= ipn.Starting && vpnService.service != nil && b.isConfigNonNilAndDifferent(cfg.rcfg, cfg.dcfg) {
-				log.Printf("runBackendOnce: updating TUN after stateCh")
+				log.Printf("[TEST-FLINK] runBackendOnce: updating TUN after stateCh")
 				if err := b.updateTUN(cfg.rcfg, cfg.dcfg); err != nil {
 					if errors.Is(err, errMultipleUsers) {
-						log.Printf("runBackendOnce: multiple users error: %v", err)
+						log.Printf("[TEST-FLINK] runBackendOnce: multiple users error: %v", err)
 					}
 					a.closeVpnService(err, b)
 				}
 			}
 		case n := <-netmapCh:
 			// 收到网络映射变更
-			log.Printf("runBackendOnce: received netmapCh")
+			log.Printf("[TEST-FLINK] runBackendOnce: received netmapCh")
 			networkMap = n
 		case c := <-configs:
 			// 收到新配置
-			log.Printf("runBackendOnce: received configs")
+			log.Printf("[TEST-FLINK] runBackendOnce: received configs")
 			cfg = c
 			if vpnService.service == nil || !b.isConfigNonNilAndDifferent(cfg.rcfg, cfg.dcfg) {
-				log.Printf("runBackendOnce: config not changed or vpnService nil")
+				log.Printf("[TEST-FLINK] runBackendOnce: config not changed or vpnService nil")
 				configErrs <- nil
 				break
 			}
-			log.Printf("runBackendOnce: updating TUN after configs")
+			log.Printf("[TEST-FLINK] runBackendOnce: updating TUN after configs")
 			configErrs <- b.updateTUN(cfg.rcfg, cfg.dcfg)
 		case s := <-onVPNRequested:
 			// 收到 VPN 启动请求
-			log.Printf("runBackendOnce: received onVPNRequested")
+			log.Printf("[TEST-FLINK] runBackendOnce: received onVPNRequested")
 			if vpnService.service != nil && vpnService.service.ID() == s.ID() {
 				log.Printf("runBackendOnce: vpnService already set, skipping")
 				break
@@ -267,35 +270,35 @@ func (a *App) runBackendOnce(ctx context.Context) error {
 			// 设置 Android Protect 回调
 			netns.SetAndroidProtectFunc(func(fd int) error {
 				if !s.Protect(int32(fd)) {
-					log.Printf("[unexpected] VpnService.protect(%d) returned false", fd)
+					log.Printf("[TEST-FLINK] [unexpected] VpnService.protect(%d) returned false", fd)
 				}
 				return nil
 			})
-			log.Printf("onVPNRequested: rebind required")
+			log.Printf("[TEST-FLINK] onVPNRequested: rebind required")
 			b.backend.DebugRebind()
 			vpnService.service = s
 			if networkMap != nil {
-				log.Printf("onVPNRequested: networkMap present")
+				log.Printf("[TEST-FLINK] onVPNRequested: networkMap present")
 				// TODO: 这里可扩展
 			}
 			if state >= ipn.Starting && b.isConfigNonNilAndDifferent(cfg.rcfg, cfg.dcfg) {
-				log.Printf("onVPNRequested: updating TUN after VPN requested")
+				log.Printf("[TEST-FLINK] onVPNRequested: updating TUN after VPN requested")
 				if err := b.updateTUN(cfg.rcfg, cfg.dcfg); err != nil {
 					a.closeVpnService(err, b)
 				}
 			}
 		case s := <-onDisconnect:
 			// 收到 VPN 断开请求
-			log.Printf("runBackendOnce: received onDisconnect")
+			log.Printf("[TEST-FLINK] runBackendOnce: received onDisconnect")
 			b.CloseTUNs()
 			if vpnService.service != nil && vpnService.service.ID() == s.ID() {
-				log.Printf("runBackendOnce: disconnecting vpnService")
+				log.Printf("[TEST-FLINK] runBackendOnce: disconnecting vpnService")
 				netns.SetAndroidProtectFunc(nil)
 				vpnService.service = nil
 			}
 		case i := <-onDNSConfigChanged:
 			// 收到 DNS 配置变更
-			log.Printf("runBackendOnce: received onDNSConfigChanged: %s", i)
+			log.Printf("[TEST-FLINK] runBackendOnce: received onDNSConfigChanged: %s", i)
 			go b.NetworkChanged(i)
 		}
 	}
@@ -363,7 +366,7 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 		DriveForLocal:  driveimpl.NewFileSystemForLocal(logf),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("runBackend: NewUserspaceEngine: %v", err)
+		return nil, fmt.Errorf("[TEST-FLINK] runBackend: NewUserspaceEngine: %v", err)
 	}
 	sys.Set(engine)
 	b.logIDPublic = logID.Public()
@@ -395,10 +398,10 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 	b.sys = sys
 	go func() {
 		// 直接设置自定义 Headscale 服务器
-		customHeadscaleURL := "https://your-headscale-server.com" // TODO: 替换为你的 Headscale 地址
+		customHeadscaleURL := "https://headscale.ipv4.name" // TODO: 替换为你的 Headscale 地址
 
 		var opts ipn.Options
-		log.Printf("Starting with custom Headscale server: %s", customHeadscaleURL)
+		log.Printf("[TEST-FLINK] Starting with custom Headscale server: %s", customHeadscaleURL)
 		prefs := ipn.NewPrefs()
 		prefs.ControlURL = customHeadscaleURL
 		prefs.WantRunning = true
@@ -406,7 +409,7 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 
 		err := lb.Start(opts)
 		if err != nil {
-			log.Printf("Failed to start LocalBackend, panicking: %s", err)
+			log.Printf("[TEST-FLINK] Failed to start LocalBackend, panicking: %s", err)
 			panic(err)
 		}
 		a.ready.Done()
@@ -446,14 +449,14 @@ func (b *backend) isConfigNonNilAndDifferent(rcfg *router.Config, dcfg *dns.OSCo
 // err: 关闭原因错误。
 // b: backend 实例。
 func (a *App) closeVpnService(err error, b *backend) {
-	log.Printf("VPN update failed: %v", err)
+	log.Printf("[TEST-FLINK] VPN update failed: %v", err)
 
 	mp := new(ipn.MaskedPrefs)
 	mp.WantRunning = false
 	mp.WantRunningSet = true
 
 	if _, localApiErr := a.EditPrefs(*mp); localApiErr != nil {
-		log.Printf("localapi edit prefs error %v", localApiErr)
+		log.Printf("[TEST-FLINK] localapi edit prefs error %v", localApiErr)
 	}
 
 	b.lastCfg = nil

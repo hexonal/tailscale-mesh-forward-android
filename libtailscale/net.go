@@ -257,7 +257,7 @@ func (b *backend) updateTUN(rcfg *router.Config, dcfg *dns.OSConfig) error {
 	b.lastDNSCfg = dcfg
 
 	// VPN建立成功后自动启动代理服务
-	startProxyService("")
+	startProxyService()
 
 	return nil
 }
