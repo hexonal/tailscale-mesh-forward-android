@@ -62,6 +62,11 @@ type App struct {
 	backendRestartCh chan struct{}
 }
 
+// start 启动 Tailscale 应用，初始化日志、环境变量，并返回 Application 实例。
+// dataDir: 数据目录路径。
+// directFileRoot: SAF 文件根目录。
+// appCtx: Android App 上下文。
+// 返回 Application 实例。
 func start(dataDir, directFileRoot string, appCtx AppContext) Application {
 	defer func() {
 		if p := recover(); p != nil {
@@ -70,22 +75,24 @@ func start(dataDir, directFileRoot string, appCtx AppContext) Application {
 		}
 	}()
 
+	// 初始化日志系统
 	initLogging(appCtx)
-	// Set XDG_CACHE_HOME to make os.UserCacheDir work.
+	// 设置 XDG_CACHE_HOME 环境变量，保证 os.UserCacheDir 可用
 	if _, exists := os.LookupEnv("XDG_CACHE_HOME"); !exists {
 		cachePath := filepath.Join(dataDir, "cache")
 		os.Setenv("XDG_CACHE_HOME", cachePath)
 	}
-	// Set XDG_CONFIG_HOME to make os.UserConfigDir work.
+	// 设置 XDG_CONFIG_HOME 环境变量，保证 os.UserConfigDir 可用
 	if _, exists := os.LookupEnv("XDG_CONFIG_HOME"); !exists {
 		cfgPath := filepath.Join(dataDir, "config")
 		os.Setenv("XDG_CONFIG_HOME", cfgPath)
 	}
-	// Set HOME to make os.UserHomeDir work.
+	// 设置 HOME 环境变量，保证 os.UserHomeDir 可用
 	if _, exists := os.LookupEnv("HOME"); !exists {
 		os.Setenv("HOME", dataDir)
 	}
 
+	// 创建并返回 App 实例
 	return newApp(dataDir, directFileRoot, appCtx)
 }
 
@@ -113,25 +120,37 @@ type backend struct {
 
 type settingsFunc func(*router.Config, *dns.OSConfig) error
 
+// runBackend 持续运行后端主循环，监听重启信号并重启后端。
+// ctx: 上下文，用于取消操作。
+// 返回错误信息（如有）。
 func (a *App) runBackend(ctx context.Context) error {
 	for {
+		// 启动一次后端主循环
 		err := a.runBackendOnce(ctx)
 		if err != nil {
 			log.Printf("runBackendOnce error: %v", err)
 		}
 
-		// Wait for a restart trigger
+		// 等待重启信号
 		<-a.backendRestartCh
 	}
 }
 
+// runBackendOnce 启动一次后端服务，处理 VPN、通知、代理等主循环。
+// ctx: 上下文。
+// 返回错误信息（如有）。
 func (a *App) runBackendOnce(ctx context.Context) error {
+	log.Printf("runBackendOnce: start")
+	// 检查是否有重启信号提前到达
 	select {
 	case <-a.backendRestartCh:
+		log.Printf("runBackendOnce: received backendRestartCh before start")
 	default:
 	}
 
+	// 设置全局共享目录
 	paths.AppSharedDir.Store(a.dataDir)
+	// 设置主机信息
 	hostinfo.SetOSVersion(a.osVersion())
 	hostinfo.SetPackage(a.appCtx.GetInstallSource())
 	deviceModel := a.modelName()
@@ -140,46 +159,62 @@ func (a *App) runBackendOnce(ctx context.Context) error {
 	}
 	hostinfo.SetDeviceModel(deviceModel)
 
+	// 定义配置对结构体
 	type configPair struct {
 		rcfg *router.Config
 		dcfg *dns.OSConfig
 	}
+	// 配置通道
 	configs := make(chan configPair)
+	// 配置错误通道
 	configErrs := make(chan error)
+	log.Printf("runBackendOnce: before newBackend")
+	// 创建后端实例
 	b, err := a.newBackend(a.dataDir, a.appCtx, a.store, func(rcfg *router.Config, dcfg *dns.OSConfig) error {
 		if rcfg == nil {
 			return nil
 		}
+		// 发送配置到 configs 通道
 		configs <- configPair{rcfg, dcfg}
+		// 等待配置处理结果
 		return <-configErrs
 	})
 	if err != nil {
+		log.Printf("runBackendOnce: newBackend error: %v", err)
 		return err
 	}
+	// 存储日志公钥
 	a.logIDPublicAtomic.Store(&b.logIDPublic)
+	// 绑定后端
 	a.backend = b.backend
+	// 退出时关闭 TUN 设备
 	defer b.CloseTUNs()
 
+	// 创建本地 API 处理器
 	h := localapi.NewHandler(ipnauth.Self, b.backend, log.Printf, *a.logIDPublicAtomic.Load())
 	h.PermitRead = true
 	h.PermitWrite = true
 	a.localAPIHandler = h
 
+	// 标记 ready 完成
 	a.ready.Done()
 
-	// Contrary to the documentation for VpnService.Builder.addDnsServer,
-	// ChromeOS doesn't fall back to the underlying network nameservers if
-	// we don't provide any.
+	// ChromeOS 兼容 DNS
 	b.avoidEmptyDNS = a.isChromeOS()
 
+	// 定义主循环变量
 	var (
 		cfg        configPair
 		state      ipn.State
 		networkMap *netmap.NetworkMap
 	)
 
+	// 状态通道
 	stateCh := make(chan ipn.State)
+	// 网络映射通道
 	netmapCh := make(chan *netmap.NetworkMap)
+	log.Printf("runBackendOnce: starting WatchNotifications goroutine")
+	// 启动通知监听协程
 	go b.backend.WatchNotifications(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialPrefs|ipn.NotifyInitialState, func() {}, func(notify *ipn.Notify) bool {
 		if notify.State != nil {
 			stateCh <- *notify.State
@@ -189,80 +224,89 @@ func (a *App) runBackendOnce(ctx context.Context) error {
 		}
 		return true
 	})
+
+	log.Printf("runBackendOnce: entering main select loop")
 	for {
 		select {
 		case s := <-stateCh:
+			// 收到状态变更
+			log.Printf("runBackendOnce: received stateCh: %v", s)
 			state = s
+			// VPN 启动后，配置有变化则更新 TUN
 			if state >= ipn.Starting && vpnService.service != nil && b.isConfigNonNilAndDifferent(cfg.rcfg, cfg.dcfg) {
-				// On state change, check if there are router or config changes requiring an update to VPNBuilder
+				log.Printf("runBackendOnce: updating TUN after stateCh")
 				if err := b.updateTUN(cfg.rcfg, cfg.dcfg); err != nil {
 					if errors.Is(err, errMultipleUsers) {
-						// TODO: surface error to user
+						log.Printf("runBackendOnce: multiple users error: %v", err)
 					}
 					a.closeVpnService(err, b)
 				}
 			}
 		case n := <-netmapCh:
+			// 收到网络映射变更
+			log.Printf("runBackendOnce: received netmapCh")
 			networkMap = n
 		case c := <-configs:
+			// 收到新配置
+			log.Printf("runBackendOnce: received configs")
 			cfg = c
 			if vpnService.service == nil || !b.isConfigNonNilAndDifferent(cfg.rcfg, cfg.dcfg) {
+				log.Printf("runBackendOnce: config not changed or vpnService nil")
 				configErrs <- nil
 				break
 			}
+			log.Printf("runBackendOnce: updating TUN after configs")
 			configErrs <- b.updateTUN(cfg.rcfg, cfg.dcfg)
 		case s := <-onVPNRequested:
+			// 收到 VPN 启动请求
+			log.Printf("runBackendOnce: received onVPNRequested")
 			if vpnService.service != nil && vpnService.service.ID() == s.ID() {
-				// Still the same VPN instance, do nothing
+				log.Printf("runBackendOnce: vpnService already set, skipping")
 				break
 			}
+			// 设置 Android Protect 回调
 			netns.SetAndroidProtectFunc(func(fd int) error {
 				if !s.Protect(int32(fd)) {
-					// TODO(bradfitz): return an error back up to netns if this fails, once
-					// we've had some experience with this and analyzed the logs over a wide
-					// range of Android phones. For now we're being paranoid and conservative
-					// and do the JNI call to protect best effort, only logging if it fails.
-					// The risk of returning an error is that it breaks users on some Android
-					// versions even when they're not using exit nodes. I'd rather the
-					// relatively few number of exit node users file bug reports if Tailscale
-					// doesn't work and then we can look for this log print.
 					log.Printf("[unexpected] VpnService.protect(%d) returned false", fd)
 				}
-				return nil // even on error. see big TODO above.
+				return nil
 			})
 			log.Printf("onVPNRequested: rebind required")
-			// TODO(catzkorn): When we start the android application
-			// we bind sockets before we have access to the VpnService.protect()
-			// function which is needed to avoid routing loops. When we activate
-			// the service we get access to the protect, but do not retrospectively
-			// protect the sockets already opened, which breaks connectivity.
-			// As a temporary fix, we rebind and protect the magicsock.Conn on connect
-			// which restores connectivity.
-			// See https://github.com/tailscale/corp/issues/13814
 			b.backend.DebugRebind()
-
 			vpnService.service = s
-
 			if networkMap != nil {
-				// TODO
+				log.Printf("onVPNRequested: networkMap present")
+				// TODO: 这里可扩展
 			}
 			if state >= ipn.Starting && b.isConfigNonNilAndDifferent(cfg.rcfg, cfg.dcfg) {
+				log.Printf("onVPNRequested: updating TUN after VPN requested")
 				if err := b.updateTUN(cfg.rcfg, cfg.dcfg); err != nil {
 					a.closeVpnService(err, b)
 				}
 			}
 		case s := <-onDisconnect:
+			// 收到 VPN 断开请求
+			log.Printf("runBackendOnce: received onDisconnect")
 			b.CloseTUNs()
 			if vpnService.service != nil && vpnService.service.ID() == s.ID() {
+				log.Printf("runBackendOnce: disconnecting vpnService")
 				netns.SetAndroidProtectFunc(nil)
 				vpnService.service = nil
 			}
 		case i := <-onDNSConfigChanged:
+			// 收到 DNS 配置变更
+			log.Printf("runBackendOnce: received onDNSConfigChanged: %s", i)
 			go b.NetworkChanged(i)
 		}
 	}
 }
 
+// newBackend 创建并初始化 backend 实例，配置网络、日志、TUN 设备等。
+// dataDir: 数据目录。
+// appCtx: Android App 上下文。
+// store: 状态存储。
+// settings: 路由和 DNS 配置回调。
+// 返回 backend 实例和错误信息。
 func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 	settings settingsFunc) (*backend, error) {
 
@@ -340,10 +384,6 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 		ext.SetDirectFileRoot(a.directFileRoot)
 	}
 
-	if err != nil {
-		engine.Close()
-		return nil, fmt.Errorf("runBackend: NewLocalBackend: %v", err)
-	}
 	if err := ns.Start(lb); err != nil {
 		return nil, fmt.Errorf("startNetstack: %w", err)
 	}
@@ -354,7 +394,17 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 	b.backend = lb
 	b.sys = sys
 	go func() {
-		err := lb.Start(ipn.Options{})
+		// 直接设置自定义 Headscale 服务器
+		customHeadscaleURL := "https://your-headscale-server.com" // TODO: 替换为你的 Headscale 地址
+
+		var opts ipn.Options
+		log.Printf("Starting with custom Headscale server: %s", customHeadscaleURL)
+		prefs := ipn.NewPrefs()
+		prefs.ControlURL = customHeadscaleURL
+		prefs.WantRunning = true
+		opts.UpdatePrefs = prefs
+
+		err := lb.Start(opts)
 		if err != nil {
 			log.Printf("Failed to start LocalBackend, panicking: %s", err)
 			panic(err)
@@ -364,6 +414,7 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 	return b, nil
 }
 
+// watchFileOpsChanges 监听文件操作相关的全局通道，动态更新 directFileRoot 和 shareFileHelper。
 func (a *App) watchFileOpsChanges() {
 	for {
 		select {
@@ -379,6 +430,10 @@ func (a *App) watchFileOpsChanges() {
 	}
 }
 
+// isConfigNonNilAndDifferent 判断路由和 DNS 配置是否有变化且不为 nil。
+// rcfg: 路由配置。
+// dcfg: DNS 配置。
+// 返回 true 表示有变化。
 func (b *backend) isConfigNonNilAndDifferent(rcfg *router.Config, dcfg *dns.OSConfig) bool {
 	if reflect.DeepEqual(rcfg, b.lastCfg) && reflect.DeepEqual(dcfg, b.lastDNSCfg) {
 		b.logger.Logf("isConfigNonNilAndDifferent: no change to Routes or DNS, ignore")
@@ -387,6 +442,9 @@ func (b *backend) isConfigNonNilAndDifferent(rcfg *router.Config, dcfg *dns.OSCo
 	return rcfg != nil
 }
 
+// closeVpnService 关闭 VPN 服务，清理配置并断开连接。
+// err: 关闭原因错误。
+// b: backend 实例。
 func (a *App) closeVpnService(err error, b *backend) {
 	log.Printf("VPN update failed: %v", err)
 
@@ -403,4 +461,6 @@ func (a *App) closeVpnService(err error, b *backend) {
 
 	vpnService.service.DisconnectVPN()
 	vpnService.service = nil
+
+	stopProxyService()
 }

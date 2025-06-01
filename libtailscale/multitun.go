@@ -1,6 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+// multitun.go 实现 Android 平台多 TUN 设备适配，支持动态切换 TUN。
 package libtailscale
 
 import (
@@ -11,14 +12,11 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 )
 
-// multiTUN implements a tun.Device that supports multiple
-// underlying devices. This is necessary because Android VPN devices
-// have static configurations and wgengine.NewUserspaceEngine
-// assumes a single static tun.Device.
+// multiTUN 实现 tun.Device 接口，支持多个底层 TUN 设备。
 type multiTUN struct {
-	// devices is for adding new devices.
+	// devices 用于添加新设备。
 	devices chan tun.Device
-	// event is the combined event channel from all active devices.
+	// events 汇总所有活跃设备的事件。
 	events chan tun.Event
 
 	close    chan struct{}
@@ -32,13 +30,14 @@ type multiTUN struct {
 	shutdownDone chan struct{}
 }
 
-// tunDevice wraps and drives a single run.Device.
+// tunDevice 封装单个 tun.Device。
 type tunDevice struct {
 	dev tun.Device
-	// close closes the device.
-	close     chan struct{}
+	// close 关闭设备
+	close chan struct{}
+	// closeDone 关闭完成通知
 	closeDone chan error
-	// readDone is notified when the read goroutine is done.
+	// readDone 读协程完成通知
 	readDone chan struct{}
 }
 
@@ -64,6 +63,7 @@ type nameReply struct {
 	err  error
 }
 
+// newTUNDevices 创建 multiTUN 实例。
 func newTUNDevices() *multiTUN {
 	d := &multiTUN{
 		devices:      make(chan tun.Device),
@@ -77,10 +77,12 @@ func newTUNDevices() *multiTUN {
 		shutdowns:    make(chan struct{}),
 		shutdownDone: make(chan struct{}),
 	}
+	// 启动主循环
 	go d.run()
 	return d
 }
 
+// run 主循环，管理设备切换、事件分发等。
 func (d *multiTUN) run() {
 	defer func() {
 		if p := recover(); p != nil {
@@ -90,31 +92,30 @@ func (d *multiTUN) run() {
 	}()
 
 	var devices []*tunDevice
-	// readDone is the readDone channel of the device being read from.
+	// readDone 当前读取设备的 readDone 通道
 	var readDone chan struct{}
-	// runDone is the closeDone channel of the device being written to.
+	// runDone 当前写入设备的 closeDone 通道
 	var runDone chan error
 	for {
 		select {
 		case <-readDone:
-			// The oldest device has reached EOF, replace it.
+			// 最老设备 EOF，切换下一个
 			n := copy(devices, devices[1:])
 			devices = devices[:n]
 			if len(devices) > 0 {
-				// Start reading from the next device.
 				dev := devices[0]
 				readDone = dev.readDone
 				go d.readFrom(dev)
 			}
 		case <-runDone:
-			// A device completed runDevice, replace it.
+			// 写入设备完成，切换下一个
 			if len(devices) > 0 {
 				dev := devices[len(devices)-1]
 				runDone = dev.closeDone
 				go d.runDevice(dev)
 			}
 		case <-d.shutdowns:
-			// Shut down all devices.
+			// 关闭所有设备
 			for _, dev := range devices {
 				close(dev.close)
 				<-dev.closeDone
@@ -123,6 +124,7 @@ func (d *multiTUN) run() {
 			devices = nil
 			d.shutdownDone <- struct{}{}
 		case <-d.close:
+			// 关闭并返回错误
 			var derr error
 			for _, dev := range devices {
 				if err := <-dev.closeDone; err != nil {
@@ -132,8 +134,8 @@ func (d *multiTUN) run() {
 			d.closeErr <- derr
 			return
 		case dev := <-d.devices:
+			// 添加新设备
 			if len(devices) > 0 {
-				// Ask the most recent device to stop.
 				prev := devices[len(devices)-1]
 				close(prev.close)
 			}
@@ -144,7 +146,6 @@ func (d *multiTUN) run() {
 				readDone:  make(chan struct{}, 1),
 			}
 			if len(devices) == 0 {
-				// Start using this first device.
 				readDone = wrap.readDone
 				go d.readFrom(wrap)
 				runDone = wrap.closeDone
@@ -169,6 +170,7 @@ func (d *multiTUN) run() {
 	}
 }
 
+// readFrom 读取数据。
 func (d *multiTUN) readFrom(dev *tunDevice) {
 	defer func() {
 		if p := recover(); p != nil {
@@ -203,6 +205,7 @@ func (d *multiTUN) readFrom(dev *tunDevice) {
 	}
 }
 
+// runDevice 处理设备写入和事件。
 func (d *multiTUN) runDevice(dev *tunDevice) {
 	defer func() {
 		if p := recover(); p != nil {
@@ -212,15 +215,9 @@ func (d *multiTUN) runDevice(dev *tunDevice) {
 	}()
 
 	defer func() {
-		// The documentation for https://developer.android.com/reference/android/net/VpnService.Builder#establish()
-		// states that "Therefore, after draining the old file
-		// descriptor...", but pending Reads are never unblocked
-		// when a new descriptor is created.
-		//
-		// Close it instead and hope that no packets are lost.
 		dev.closeDone <- dev.dev.Close()
 	}()
-	// Pump device events.
+	// 事件分发协程
 	go func() {
 		defer func() {
 			if p := recover(); p != nil {
@@ -243,25 +240,26 @@ func (d *multiTUN) runDevice(dev *tunDevice) {
 			n, err := dev.dev.Write(w.data, w.offset)
 			w.reply <- ioReply{n, err}
 		case <-dev.close:
-			// Device closed.
+			// 设备关闭
 			return
 		case <-d.close:
-			// Multi-device closed.
+			// 多设备关闭
 			return
 		}
 	}
 }
 
+// add 添加新 tun 设备。
 func (d *multiTUN) add(dev tun.Device) {
 	d.devices <- dev
 }
 
+// File 返回底层文件（Android 不支持）。
 func (d *multiTUN) File() *os.File {
-	// The underlying file descriptor is not constant on Android.
-	// Let's hope no-one uses it.
 	panic("not available on Android")
 }
 
+// Read 读取数据。
 func (d *multiTUN) Read(data [][]byte, sizes []int, offset int) (int, error) {
 	r := make(chan ioReply)
 	d.reads <- ioRequest{data, sizes, offset, r}
@@ -269,6 +267,7 @@ func (d *multiTUN) Read(data [][]byte, sizes []int, offset int) (int, error) {
 	return rep.count, rep.err
 }
 
+// Write 写入数据。
 func (d *multiTUN) Write(data [][]byte, offset int) (int, error) {
 	r := make(chan ioReply)
 	d.writes <- ioRequest{data, nil, offset, r}
@@ -276,6 +275,7 @@ func (d *multiTUN) Write(data [][]byte, offset int) (int, error) {
 	return rep.count, rep.err
 }
 
+// MTU 获取 MTU。
 func (d *multiTUN) MTU() (int, error) {
 	r := make(chan mtuReply)
 	d.mtus <- r
@@ -283,6 +283,7 @@ func (d *multiTUN) MTU() (int, error) {
 	return rep.mtu, rep.err
 }
 
+// Name 获取设备名。
 func (d *multiTUN) Name() (string, error) {
 	r := make(chan nameReply)
 	d.names <- r
@@ -290,22 +291,24 @@ func (d *multiTUN) Name() (string, error) {
 	return rep.name, rep.err
 }
 
+// Events 获取事件通道。
 func (d *multiTUN) Events() <-chan tun.Event {
 	return d.events
 }
 
+// Shutdown 关闭所有设备。
 func (d *multiTUN) Shutdown() {
 	d.shutdowns <- struct{}{}
 	<-d.shutdownDone
 }
 
+// Close 关闭 multiTUN。
 func (d *multiTUN) Close() error {
 	close(d.close)
 	return <-d.closeErr
 }
 
+// BatchSize 返回批处理大小（Android 固定为 1）。
 func (d *multiTUN) BatchSize() int {
-	// TODO(raggi): currently Android disallows the necessary ioctls to enable
-	// batching. File a bug.
 	return 1
 }

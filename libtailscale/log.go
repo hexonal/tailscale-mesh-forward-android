@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Gratefully borrowed from Gio UI https://gioui.org/ under MIT license
-
+// log.go 提供 Android 平台下的日志重定向与适配。
 package libtailscale
 
 /*
@@ -24,34 +24,41 @@ import (
 	"unsafe"
 )
 
-// 1024 is the truncation limit from android/log.h, plus a \n.
+// logLineLimit 日志单行最大长度（含换行），与 android/log.h 保持一致。
 const logLineLimit = 1024
 
+// ID 当前进程名。
 var ID = filepath.Base(os.Args[0])
 
+// logTag 用于 Android 日志的 tag。
 var logTag = C.CString(ID)
 
+// initLogging 初始化日志系统，将 Go 日志重定向到 Android logcat。
+// appCtx: Android App 上下文。
 func initLogging(appCtx AppContext) {
-	// Android's logcat already includes timestamps.
+	// Android logcat 已包含时间戳，去除 Go 日志时间。
 	log.SetFlags(log.Flags() &^ log.LstdFlags)
+	// 设置日志输出为 androidLogWriter
 	log.SetOutput(&androidLogWriter{
 		appCtx: appCtx,
 	})
 
-	// Redirect stdout and stderr to the Android logger.
+	// 重定向 stdout 和 stderr 到 Android 日志
 	logFd(os.Stdout.Fd())
 	logFd(os.Stderr.Fd())
 }
 
+// androidLogWriter 实现 io.Writer，将日志写入 Android logcat。
 type androidLogWriter struct {
 	appCtx AppContext
 }
 
+// Write 实现 io.Writer，将数据分段写入 Android 日志。
 func (w *androidLogWriter) Write(data []byte) (int, error) {
 	n := 0
 	for len(data) > 0 {
 		msg := data
-		// Truncate the buffer
+		// 截断超长日志
 		if len(msg) > logLineLimit {
 			msg = msg[:logLineLimit]
 		}
@@ -62,14 +69,18 @@ func (w *androidLogWriter) Write(data []byte) (int, error) {
 	return n, nil
 }
 
+// logFd 重定向指定 fd 到 Android 日志。
+// fd: 文件描述符。
 func logFd(fd uintptr) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		panic(err)
 	}
+	// 复制 w 的 fd 到目标 fd
 	if err := syscall.Dup3(int(w.Fd()), int(fd), syscall.O_CLOEXEC); err != nil {
 		panic(err)
 	}
+	// 启动协程读取日志并写入 Android logcat
 	go func() {
 		defer func() {
 			if p := recover(); p != nil {
@@ -79,7 +90,7 @@ func logFd(fd uintptr) {
 		}()
 
 		lineBuf := bufio.NewReaderSize(r, logLineLimit)
-		// The buffer to pass to C, including the terminating '\0'.
+		// buf 用于传递给 C，包含结尾的 '\0'
 		buf := make([]byte, lineBuf.Size()+1)
 		cbuf := (*C.char)(unsafe.Pointer(&buf[0]))
 		for {
@@ -91,8 +102,7 @@ func logFd(fd uintptr) {
 			buf[len(line)] = 0
 			C.__android_log_write(C.ANDROID_LOG_INFO, logTag, cbuf)
 		}
-		// The garbage collector doesn't know that w's fd was dup'ed.
-		// Avoid finalizing w, and thereby avoid its finalizer closing its fd.
+		// 防止 w 被 GC 回收导致 fd 被关闭
 		runtime.KeepAlive(w)
 	}()
 }
