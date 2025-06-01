@@ -296,6 +296,9 @@ func (a *App) runBackendOnce(ctx context.Context) error {
 				netns.SetAndroidProtectFunc(nil)
 				vpnService.service = nil
 			}
+			// 停止代理服务
+			log.Printf("[TEST-FLINK] runBackendOnce: stopping proxyService")
+			stopProxyService()
 		case i := <-onDNSConfigChanged:
 			// 收到 DNS 配置变更
 			log.Printf("[TEST-FLINK] runBackendOnce: received onDNSConfigChanged: %s", i)
@@ -464,6 +467,4 @@ func (a *App) closeVpnService(err error, b *backend) {
 
 	vpnService.service.DisconnectVPN()
 	vpnService.service = nil
-
-	stopProxyService()
 }
