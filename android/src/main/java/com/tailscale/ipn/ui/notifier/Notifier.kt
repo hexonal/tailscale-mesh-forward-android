@@ -91,6 +91,12 @@ object Notifier {
   val incomingFiles: StateFlow<List<Ipn.PartialFile>?> = MutableStateFlow(null)
   /** 等待处理的文件消息（Taildrop 功能）。 */
   val filesWaiting: StateFlow<Empty.Message?> = MutableStateFlow(null)
+
+  /** 注册流程 V2 URL（如有） */
+  val registerV2Url: StateFlow<String?> = MutableStateFlow<String?>(null)
+
+  /** 注册流程 Code（如有） */
+  val registerCode: StateFlow<String?> =  MutableStateFlow<String?>(null)
   // endregion
 
   /**
@@ -144,9 +150,10 @@ object Notifier {
       // 启动 Go 层通知监听，回调中处理每条通知
       manager =
           app.watchNotifications(mask.toLong()) { notification ->
-            // 反序列化为 Notify 数据模型
+            // 反序列化为 Notify 数据模型（包含注册流程扩展字段 RegisterV2URL 和 Code）
             val notify = decoder.decodeFromStream<Notify>(notification.inputStream())
             TSLog.d(TAG, "[TEST-FLINK] 收到通知: $notify")
+
             // 逐字段处理并记录日志
             notify.State?.let {
               TSLog.d(TAG, "[TEST-FLINK] State 变化: ${Ipn.State.fromInt(it)}")
@@ -171,6 +178,18 @@ object Notifier {
             notify.BrowseToURL?.let {
               TSLog.d(TAG, "[TEST-FLINK] BrowseToURL 变化: $it")
               browseToURL.set(it)
+
+              // registerV2Url 直接替换 register 为 registerV2
+              if (it.contains("register")) {
+                registerV2Url.set(it.replace("/register/", "/registerV2/"))
+                val segments = it.split("register/")
+                // 判断倒数第二段是否为 register
+
+                if (segments.size >= 2 &&  !segments.last().contains("register")) {
+                  registerCode.set(segments.last())
+                }
+                TSLog.d(TAG, "[TEST-FLINK] 自动生成 registerV2Url: ${registerV2Url.value}, code: ${registerCode.value}")
+              }
             }
             notify.LoginFinished?.let {
               TSLog.d(TAG, "[TEST-FLINK] LoginFinished 变化: ${it.property}")
