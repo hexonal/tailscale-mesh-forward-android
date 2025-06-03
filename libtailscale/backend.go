@@ -247,7 +247,7 @@ func (a *App) runBackendOnce(ctx context.Context) error {
 			}
 		case n := <-netmapCh:
 			// 收到网络映射变更
-			log.Printf("[TEST-FLINK] runBackendOnce: received netmapCh")
+			log.Printf("[TEST-FLINK] runBackendOnce: received netmapCh, networkMap: %+v", n)
 			networkMap = n
 		case c := <-configs:
 			// 收到新配置
