@@ -76,6 +76,15 @@ android {
     flavorDimensions "version"
     namespace 'com.tailscale.ipn'
 
+    signingConfigs {
+        release {
+            storeFile file("tailscale_sign.jks")
+            storePassword '123456'
+            keyAlias 'tailscale_sign'
+            keyPassword '123456'
+        }
+    }
+
     buildTypes {
         applicationTest {
             initWith debug
@@ -86,6 +95,7 @@ android {
         }
         debug {
             manifestPlaceholders.leanbackRequired = false
+            signingConfig signingConfigs.release
         }
         release {
             manifestPlaceholders.leanbackRequired = false
@@ -93,6 +103,8 @@ android {
             minifyEnabled true
 
             shrinkResources true
+
+            signingConfig signingConfigs.release
 
             proguardFiles getDefaultProguardFile(
                     'proguard-android-optimize.txt'),
