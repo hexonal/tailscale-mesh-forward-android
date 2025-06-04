@@ -3,12 +3,15 @@
 
 package com.tailscale.ipn.ui.view
 
+import android.R.attr.value
 import android.os.Build
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,6 +68,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -77,6 +81,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.patrykandpatrick.vico.core.component.dimension.Margins
 import com.tailscale.ipn.App
 import com.tailscale.ipn.R
 import com.tailscale.ipn.mdm.MDMSettings
@@ -87,6 +92,7 @@ import com.tailscale.ipn.ui.model.IpnLocal
 import com.tailscale.ipn.ui.model.Netmap
 import com.tailscale.ipn.ui.model.Permissions
 import com.tailscale.ipn.ui.model.Tailcfg
+import com.tailscale.ipn.ui.notifier.Notifier.registerCode
 import com.tailscale.ipn.ui.theme.AppTheme
 import com.tailscale.ipn.ui.theme.customErrorContainer
 import com.tailscale.ipn.ui.theme.disabled
@@ -199,18 +205,18 @@ fun MainView(
                   }
                 },
                 trailingContent = {
-                  Box(modifier = Modifier.padding(8.dp), contentAlignment = Alignment.CenterEnd) {
-                    when (user) {
-                      null -> SettingsButton { navigation.onNavigateToSettings() }
-                      else -> {
-                        Avatar(
-                            profile = user,
-                            size = 36,
-                            { navigation.onNavigateToSettings() },
-                            isFocusable = true)
-                      }
-                    }
-                  }
+//                  Box(modifier = Modifier.padding(8.dp), contentAlignment = Alignment.CenterEnd) {
+//                    when (user) {
+//                      null -> SettingsButton { navigation.onNavigateToSettings() }
+//                      else -> {
+//                        Avatar(
+//                            profile = user,
+//                            size = 36,
+//                            { navigation.onNavigateToSettings() },
+//                            isFocusable = true)
+//                      }
+//                    }
+//                  }
                 })
 
             when (state) {
@@ -230,15 +236,15 @@ fun MainView(
                 }
 
                 if (showExitNodePicker.value == ShowHide.Show) {
-                  ExitNodeStatus(
+                  MainRunningContent(
                       navAction = navigation.onNavigateToExitNodes, viewModel = viewModel)
                 }
 
-                PeerList(
+                /*PeerList(
                     viewModel = viewModel,
                     onNavigateToPeerDetails = navigation.onNavigateToPeerDetails,
                     onSearchBarClick = navigation.onNavigateToSearch,
-                    onSearch = { viewModel.searchPeers(it) })
+                    onSearch = { viewModel.searchPeers(it) })*/
               }
               Ipn.State.NoState,
               Ipn.State.Starting -> StartingView()
@@ -313,6 +319,51 @@ fun LaunchVpnPermissionIfNeeded(viewModel: MainViewModel) {
       viewModel.showVPNPermissionLauncherIfUnauthorized()
     }
   }
+}
+
+@Composable
+fun MainRunningContent(navAction: () -> Unit, viewModel: MainViewModel) {
+    val registerCode by viewModel.registerCode.collectAsState()
+    val peerList by viewModel.peers.collectAsState(initial = emptyList<PeerSet>())
+    val ip = peerList.firstOrNull()?.peers?.firstOrNull()?.Addresses?.first()?.split("/")?.first() ?: ""
+    val localClipboardManager = LocalClipboardManager.current
+    val interactionSource = remember { MutableInteractionSource() }
+    Column {
+        Row {
+            Text(
+                text = "IP: $ip",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp)
+            )
+
+            Icon(
+                painterResource(R.drawable.clipboard),
+                contentDescription = stringResource(R.string.copy_to_clipboard),
+                modifier = Modifier.clickable(
+                    interactionSource = interactionSource, indication = LocalIndication.current) {
+                    localClipboardManager.setText(AnnotatedString(ip))
+                },
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 16.dp)) {
+            Text(
+                text = "Key: ${registerCode ?: ""}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp)
+            )
+
+            Icon(
+                painterResource(R.drawable.clipboard),
+                contentDescription = stringResource(R.string.copy_to_clipboard),
+                modifier = Modifier.clickable(
+                    interactionSource = interactionSource, indication = LocalIndication.current) {
+                    localClipboardManager.setText(AnnotatedString(registerCode ?: ""))
+                },
+            )
+        }
+    }
 }
 
 @Composable

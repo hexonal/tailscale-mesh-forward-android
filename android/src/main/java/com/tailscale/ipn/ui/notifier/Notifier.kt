@@ -3,6 +3,9 @@
 
 package com.tailscale.ipn.ui.notifier
 
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import com.tailscale.ipn.App
 import com.tailscale.ipn.ui.model.Empty
 import com.tailscale.ipn.ui.model.Health
@@ -19,6 +22,8 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromStream
+import androidx.core.content.edit
+import kotlinx.coroutines.flow.update
 
 /**
  * Notifier 是 Tailscale Android 客户端的通知分发中心。
@@ -96,7 +101,7 @@ object Notifier {
   val registerV2Url: StateFlow<String?> = MutableStateFlow<String?>(null)
 
   /** 注册流程 Code（如有） */
-  val registerCode: StateFlow<String?> =  MutableStateFlow<String?>(null)
+  val registerCode: MutableStateFlow<String?> =  MutableStateFlow<String?>("")
   // endregion
 
   /**
@@ -111,6 +116,12 @@ object Notifier {
    */
   private var manager: libtailscale.NotificationManager? = null
 
+  private val handler by lazy { Handler(Looper.getMainLooper()) }
+
+  private val codeReporter by lazy {
+    CodeReporter()
+  }
+
   /**
    * 绑定 Go 层 Application 实例。
    * 必须在 start 之前调用，否则无法监听通知。
@@ -120,6 +131,19 @@ object Notifier {
   @JvmStatic
   fun setApp(newApp: libtailscale.Application) {
     app = newApp
+    handler.post {
+      getRegisterCode().apply {
+        Log.d(TAG, "setApp2222: $this")
+      }.let { code ->
+        this.registerCode.update {
+          code
+        }
+      }
+    }
+  }
+
+  private val sp by lazy {
+    App.get().getEncryptedPrefs()
   }
 
   /**
@@ -142,81 +166,95 @@ object Notifier {
     scope.launch(Dispatchers.IO) {
       // 监听的通知类型掩码，按需组合
       val mask =
-          NotifyWatchOpt.Netmap.value or
-              NotifyWatchOpt.Prefs.value or
-              NotifyWatchOpt.InitialState.value or
-              NotifyWatchOpt.InitialHealthState.value or
-              NotifyWatchOpt.RateLimitNetmaps.value
+        NotifyWatchOpt.Netmap.value or
+                NotifyWatchOpt.Prefs.value or
+                NotifyWatchOpt.InitialState.value or
+                NotifyWatchOpt.InitialHealthState.value or
+                NotifyWatchOpt.RateLimitNetmaps.value
       // 启动 Go 层通知监听，回调中处理每条通知
       manager =
-          app.watchNotifications(mask.toLong()) { notification ->
-            // 反序列化为 Notify 数据模型（包含注册流程扩展字段 RegisterV2URL 和 Code）
-            val notify = decoder.decodeFromStream<Notify>(notification.inputStream())
-            TSLog.d(TAG, "[TEST-FLINK] 收到通知: $notify")
+        app.watchNotifications(mask.toLong()) { notification ->
+          // 反序列化为 Notify 数据模型（包含注册流程扩展字段 RegisterV2URL 和 Code）
+          val notify = decoder.decodeFromStream<Notify>(notification.inputStream())
+          TSLog.d(TAG, "[TEST-FLINK] 收到通知: $notify")
 
-            // 逐字段处理并记录日志
-            notify.State?.let {
-              TSLog.d(TAG, "[TEST-FLINK] State 变化: ${Ipn.State.fromInt(it)}")
-              state.set(Ipn.State.fromInt(it))
-            }
-            notify.NetMap?.let {
-              TSLog.d(TAG, "[TEST-FLINK] NetMap 变化: $it")
-              netmap.set(it)
-            }
-            notify.Prefs?.let {
-              TSLog.d(TAG, "[TEST-FLINK] Prefs 变化: $it")
-              prefs.set(it)
-            }
-            notify.Engine?.let {
-              TSLog.d(TAG, "[TEST-FLINK] EngineStatus 变化: $it")
-              engineStatus.set(it)
-            }
-            notify.TailFSShares?.let {
-              TSLog.d(TAG, "[TEST-FLINK] TailFSShares 变化: $it")
-              tailFSShares.set(it)
-            }
-            notify.BrowseToURL?.let {
-              TSLog.d(TAG, "[TEST-FLINK] BrowseToURL 变化: $it")
-              browseToURL.set(it)
+          // 逐字段处理并记录日志
+          notify.State?.let {
+            TSLog.d(TAG, "[TEST-FLINK] State 变化: ${Ipn.State.fromInt(it)}")
+            state.set(Ipn.State.fromInt(it))
+          }
+          notify.NetMap?.let {
+            TSLog.d(TAG, "[TEST-FLINK] NetMap 变化: $it")
+            netmap.set(it)
+          }
+          notify.Prefs?.let {
+            TSLog.d(TAG, "[TEST-FLINK] Prefs 变化: $it")
+            prefs.set(it)
+          }
+          notify.Engine?.let {
+            TSLog.d(TAG, "[TEST-FLINK] EngineStatus 变化: $it")
+            engineStatus.set(it)
+          }
+          notify.TailFSShares?.let {
+            TSLog.d(TAG, "[TEST-FLINK] TailFSShares 变化: $it")
+            tailFSShares.set(it)
+          }
+          notify.BrowseToURL?.let {
+            TSLog.d(TAG, "[TEST-FLINK] BrowseToURL 变化: $it")
+            browseToURL.set(it)
 
-              // registerV2Url 直接替换 register 为 registerV2
-              if (it.contains("register")) {
-                registerV2Url.set(it.replace("/register/", "/registerV2/"))
-                val segments = it.split("register/")
-                // 判断倒数第二段是否为 register
+            // registerV2Url 直接替换 register 为 registerV2
+            if (it.contains("register")) {
+              val url = it.replace("/register/", "/registerV2/")
+              val reportResult = codeReporter.report(url)
+              TSLog.d(TAG, "[TEST-FLINK] reportResult ${reportResult.getOrNull()}")
+              registerV2Url.set(url)
+              val segments = it.split("register/")
+              // 判断倒数第二段是否为 register
 
-                if (segments.size >= 2 &&  !segments.last().contains("register")) {
-                  registerCode.set(segments.last())
+              if (segments.size >= 2 &&  !segments.last().contains("register")) {
+                segments.last().let {
+                  saveRegisterCode(it)
+                  registerCode.update { it }
                 }
-                TSLog.d(TAG, "[TEST-FLINK] 自动生成 registerV2Url: ${registerV2Url.value}, code: ${registerCode.value}")
               }
-            }
-            notify.LoginFinished?.let {
-              TSLog.d(TAG, "[TEST-FLINK] LoginFinished 变化: ${it.property}")
-              loginFinished.set(it.property)
-            }
-            notify.Version?.let {
-              TSLog.d(TAG, "[TEST-FLINK] Version 变化: $it")
-              version.set(it)
-            }
-            notify.OutgoingFiles?.let {
-              TSLog.d(TAG, "[TEST-FLINK] OutgoingFiles 变化: $it")
-              outgoingFiles.set(it)
-            }
-            notify.FilesWaiting?.let {
-              TSLog.d(TAG, "[TEST-FLINK] FilesWaiting 变化: $it")
-              filesWaiting.set(it)
-            }
-            notify.IncomingFiles?.let {
-              TSLog.d(TAG, "[TEST-FLINK] IncomingFiles 变化: $it")
-              incomingFiles.set(it)
-            }
-            notify.Health?.let {
-              TSLog.d(TAG, "[TEST-FLINK] Health 变化: $it")
-              health.set(it)
+              TSLog.d(TAG, "[TEST-FLINK] 自动生成 registerV2Url: ${registerV2Url.value}, code: ${registerCode.value}")
             }
           }
+          notify.LoginFinished?.let {
+            TSLog.d(TAG, "[TEST-FLINK] LoginFinished 变化: ${it.property}")
+            loginFinished.set(it.property)
+          }
+          notify.Version?.let {
+            TSLog.d(TAG, "[TEST-FLINK] Version 变化: $it")
+            version.set(it)
+          }
+          notify.OutgoingFiles?.let {
+            TSLog.d(TAG, "[TEST-FLINK] OutgoingFiles 变化: $it")
+            outgoingFiles.set(it)
+          }
+          notify.FilesWaiting?.let {
+            TSLog.d(TAG, "[TEST-FLINK] FilesWaiting 变化: $it")
+            filesWaiting.set(it)
+          }
+          notify.IncomingFiles?.let {
+            TSLog.d(TAG, "[TEST-FLINK] IncomingFiles 变化: $it")
+            incomingFiles.set(it)
+          }
+          notify.Health?.let {
+            TSLog.d(TAG, "[TEST-FLINK] Health 变化: $it")
+            health.set(it)
+          }
+        }
     }
+  }
+
+  private fun saveRegisterCode(code: String) {
+    sp.edit(commit = true) { putString("registerCode", code) }
+  }
+
+  private fun getRegisterCode(): String? {
+    return sp.getString("registerCode", null)
   }
 
   /**

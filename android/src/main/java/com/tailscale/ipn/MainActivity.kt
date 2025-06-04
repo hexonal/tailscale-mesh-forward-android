@@ -475,7 +475,7 @@ class MainActivity : ComponentActivity() {
       }
     }
 
-    val url = urlString.toUri()
+    /*val url = urlString.toUri()
     try {
       TSLog.d(TAG, "[TEST-FLINK] 尝试用 CustomTabs 打开浏览器: $url")
       val customTabsIntent = CustomTabsIntent.Builder().build()
@@ -489,7 +489,7 @@ class MainActivity : ComponentActivity() {
       } catch (e: Exception) {
         TSLog.e(TAG, "[TEST-FLINK] Login: failed to open browser: $e")
       }
-    }
+    }*/
   }
 
   override fun onResume() {

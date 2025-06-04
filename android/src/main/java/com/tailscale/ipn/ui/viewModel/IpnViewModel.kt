@@ -18,6 +18,7 @@ import com.tailscale.ipn.ui.util.set
 import com.tailscale.ipn.util.TSLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
@@ -42,6 +43,7 @@ open class IpnViewModel : ViewModel() {
 
   val prefs = Notifier.prefs
   val netmap = Notifier.netmap
+  val registerCode = Notifier.registerCode.asStateFlow()
   private val _nodeState = MutableStateFlow(NodeState.NONE)
   val nodeState: StateFlow<NodeState> = _nodeState
   val managedByOrganization = MDMSettings.managedByOrganizationName.flow
