@@ -8,11 +8,15 @@ on:
   pull_request:
     # all PRs on all branches
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    if: "!contains(github.event.head_commit.message, '[ci skip]')"
+    if: ${{ !contains(github.event.head_commit.message, '[ci skip]') }}
 
     steps:
       - name: Check out code
@@ -30,8 +34,120 @@ jobs:
       - name: Clean
         run: make clean
 
-      - name: Build APKs
+      - name: Build Debug APK
+        if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
         run: make tailscale-debug.apk
+
+      - name: Build Release APK
+        if: ${{ github.event_name != 'pull_request' && github.ref != 'refs/heads/main' }}
+        run: make tailscale-release.apk
 
       - name: Run tests
         run: make test
+
+      - name: Upload Debug APK
+        if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk-${{ github.sha }}
+          path: "tailscale-debug.apk"
+          retention-days: 30
+
+      - name: Upload Release APK
+        if: ${{ github.event_name != 'pull_request' && github.ref != 'refs/heads/main' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk-${{ github.sha }}
+          path: "tailscale-release.apk"
+          retention-days: 90
+
+      - name: Get version info
+        id: version
+        run: |
+          VERSION=$(make version | head -n 1)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "short_sha=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+
+      - name: Upload Debug APK to GitHub Packages
+        if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        run: |
+          APK_PATH="tailscale-debug.apk"
+          VERSION="${{ steps.version.outputs.version }}-debug-${{ steps.version.outputs.short_sha }}"
+          
+          # Upload APK as a generic package
+          curl -X PUT \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/vnd.android.package-archive" \
+            --data-binary @"${APK_PATH}" \
+            "https://maven.pkg.github.com/${{ github.repository }}/com/tailscale/ipn/tailscale-debug/${VERSION}/tailscale-debug-${VERSION}.apk"
+
+      - name: Upload Release APK to GitHub Packages
+        if: ${{ github.event_name != 'pull_request' && github.ref != 'refs/heads/main' }}
+        run: |
+          APK_PATH="tailscale-release.apk"
+          VERSION="${{ steps.version.outputs.version }}-${{ steps.version.outputs.short_sha }}"
+          
+          # Upload APK as a generic package
+          curl -X PUT \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/vnd.android.package-archive" \
+            --data-binary @"${APK_PATH}" \
+            "https://maven.pkg.github.com/${{ github.repository }}/com/tailscale/ipn/tailscale-release/${VERSION}/tailscale-release-${VERSION}.apk"
+
+      - name: Create Package Metadata for Debug APK
+        if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}-debug-${{ steps.version.outputs.short_sha }}"
+          
+          # Create POM file for the debug APK
+          cat > debug-pom.xml << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <project xmlns="http://maven.apache.org/POM/4.0.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+                   http://maven.apache.org/xsd/maven-4.0.0.xsd">
+              <modelVersion>4.0.0</modelVersion>
+              <groupId>com.tailscale.ipn</groupId>
+              <artifactId>tailscale-debug</artifactId>
+              <version>${VERSION}</version>
+              <packaging>apk</packaging>
+              <name>Tailscale Debug APK</name>
+              <description>Debug build of Tailscale Android app</description>
+          </project>
+          EOF
+          
+          # Upload POM file
+          curl -X PUT \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/xml" \
+            --data-binary @debug-pom.xml \
+            "https://maven.pkg.github.com/${{ github.repository }}/com/tailscale/ipn/tailscale-debug/${VERSION}/tailscale-debug-${VERSION}.pom"
+
+      - name: Create Package Metadata for Release APK
+        if: ${{ github.event_name != 'pull_request' && github.ref != 'refs/heads/main' }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}-${{ steps.version.outputs.short_sha }}"
+          
+          # Create POM file for the release APK
+          cat > release-pom.xml << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <project xmlns="http://maven.apache.org/POM/4.0.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+                   http://maven.apache.org/xsd/maven-4.0.0.xsd">
+              <modelVersion>4.0.0</modelVersion>
+              <groupId>com.tailscale.ipn</groupId>
+              <artifactId>tailscale-release</artifactId>
+              <version>${VERSION}</version>
+              <packaging>apk</packaging>
+              <name>Tailscale Release APK</name>
+              <description>Release build of Tailscale Android app</description>
+          </project>
+          EOF
+          
+          # Upload POM file
+          curl -X PUT \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/xml" \
+            --data-binary @release-pom.xml \
+            "https://maven.pkg.github.com/${{ github.repository }}/com/tailscale/ipn/tailscale-release/${VERSION}/tailscale-release-${VERSION}.pom"

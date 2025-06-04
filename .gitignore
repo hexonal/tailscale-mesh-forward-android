@@ -15,6 +15,7 @@ android/src/main/jniLibs/*
 android_legacy/.idea
 android_legacy/local.properties
 android/.idea
+android/libs
 android/local.properties
 .idea
 
@@ -43,8 +44,8 @@ tailscale.jks
 # Debug symbols
 *.debug
 
-!libtailscale.aar
-!libtailscale-sources.jar
+libtailscale.aar
+libtailscale-sources.jar
 .DS_Store
 
-!tailscale.version
+tailscale.version

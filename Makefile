@@ -27,6 +27,7 @@ $(info Using NDK_ROOT: $(NDK_ROOT))
 $(info Using STRIP_TOOL: $(STRIP_TOOL))
 
 DEBUG_APK := tailscale-debug.apk
+RELEASE_APK := tailscale-release.apk
 RELEASE_AAB := tailscale-release.aab
 RELEASE_TV_AAB := tailscale-tv-release.aab
 
@@ -121,6 +122,14 @@ tailscale-debug: $(DEBUG_APK)
 $(DEBUG_APK): libtailscale debug-symbols version gradle-dependencies build-unstripped-aar
 	(cd android && ./gradlew test assembleDebug)
 	install -C android/build/outputs/apk/debug/android-debug.apk $@
+
+.PHONY: tailscale-release
+tailscale-release: $(RELEASE_APK)
+
+$(RELEASE_APK): version gradle-dependencies
+	@echo "Building release APK"
+	(cd android && ./gradlew test assembleRelease)
+	install -C android/build/outputs/apk/release/android-release.apk $@
 
 # Builds the release AAB and signs it (phone/tablet/chromeOS variant)
 .PHONY: release
@@ -364,7 +373,7 @@ docker-remove-shell-image: ## Removes all docker shell image
 .PHONY: clean
 clean: ## Remove build artifacts. Does not purge docker build envs. Use dockerRemoveEnv for that.
 	@echo "Cleaning up old build artifacts"
-	-rm -rf android/build $(DEBUG_APK) $(RELEASE_AAB) $(RELEASE_TV_AAB) $(LIBTAILSCALE_AAR) android/libs *.apk *.aab
+	-rm -rf android/build $(DEBUG_APK) $(RELEASE_APK) $(RELEASE_AAB) $(RELEASE_TV_AAB) $(LIBTAILSCALE_AAR) android/libs *.apk *.aab
 	@echo "Cleaning cached toolchain"
 	-rm -rf $(HOME)/.cache/tailscale-go{,.extracted}
 	-pkill -f gradle
