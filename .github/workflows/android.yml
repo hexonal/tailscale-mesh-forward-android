@@ -74,7 +74,7 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/vnd.android.package-archive" \
             --data-binary @tailscale-debug.apk \
-            "https://maven.pkg.github.com/${{ github.repository }}/com/tailscale/ipn/tailscale-debug/latest/tailscale-debug.apk"
+            "https://maven.pkg.github.com/${{ github.repository }}/tailscale-debug/latest.apk"
 
       # Upload Release APK to GitHub Packages (other branches, with version)
       - name: Upload Release APK to GitHub Packages
@@ -85,4 +85,4 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/vnd.android.package-archive" \
             --data-binary @tailscale-release.apk \
-            "https://maven.pkg.github.com/${{ github.repository }}/com/tailscale/ipn/tailscale-release/${VERSION}/tailscale-release-${VERSION}.apk"
+            "https://maven.pkg.github.com/${{ github.repository }}/tailscale-release/${VERSION}.apk"
