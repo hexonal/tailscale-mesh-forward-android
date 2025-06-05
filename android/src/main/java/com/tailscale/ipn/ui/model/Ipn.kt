@@ -52,10 +52,10 @@ class Ipn {
       var TailFSShares: List<String>? = null,
       var Health: Health.State? = null,
       // RegisterV2URL: 注册流程专用，若为注册流程，Go 层会自动生成 V2 注册 URL 并通过此字段下发。
-      // 例如：https://headscale.ipv4.name/registerV2/xxxxxx
+      // 例如：https://headscale.yupaowang.com/registerV2/xxxxxx
       val RegisterV2URL: String? = null,
       // Code: 注册流程专用，表示注册时的唯一 code（通常为 URL 路径最后一段）。
-      // 例如：https://headscale.ipv4.name/register/xxxxxx 中的 xxxxxx
+      // 例如：https://headscale.yupaowang.com/register/xxxxxx 中的 xxxxxx
       val Code: String? = null
   )
 
