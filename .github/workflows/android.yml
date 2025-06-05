@@ -30,6 +30,12 @@ jobs:
       - name: Clean
         run: make clean
 
+      # Build dependencies first
+      - name: Generate tailscale.version
+        run: make tailscale.version
+      - name: Build libtailscale AAR
+        run: make libtailscale
+
       # Build APKs
       - name: Build Debug APK
         if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}
@@ -57,9 +63,8 @@ jobs:
           path: tailscale-release.apk
           retention-days: 30
 
-      # Get version info for release APK
+      # Get version info
       - name: Get version info
-        if: ${{ github.ref != 'refs/heads/main' && github.event_name != 'pull_request' }}
         id: version
         run: |
           VERSION=$(grep VERSION_LONG tailscale.version | cut -d'=' -f2 | tr -d '"')
@@ -74,7 +79,7 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/vnd.android.package-archive" \
             --data-binary @tailscale-debug.apk \
-            "https://maven.pkg.github.com/${{ github.repository }}/tailscale-debug/latest.apk"
+            "https://maven.pkg.github.com/${{ github.repository }}/com/tailscale/ipn/tailscale-debug/latest/tailscale-debug-latest.apk"
 
       # Upload Release APK to GitHub Packages (other branches, with version)
       - name: Upload Release APK to GitHub Packages
@@ -85,4 +90,15 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/vnd.android.package-archive" \
             --data-binary @tailscale-release.apk \
-            "https://maven.pkg.github.com/${{ github.repository }}/tailscale-release/${VERSION}.apk"
+            "https://maven.pkg.github.com/${{ github.repository }}/com/tailscale/ipn/tailscale-release/${VERSION}/tailscale-release-${VERSION}.apk"
+
+      # Upload libtailscale AAR to GitHub Packages
+      - name: Upload libtailscale AAR to GitHub Packages
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}-${{ steps.version.outputs.short_sha }}"
+          curl -X PUT \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/vnd.android.package-archive" \
+            --data-binary @android/libs/libtailscale.aar \
+            "https://maven.pkg.github.com/${{ github.repository }}/com/tailscale/ipn/libtailscale/${VERSION}/libtailscale-${VERSION}.aar"
