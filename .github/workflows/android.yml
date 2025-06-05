@@ -9,8 +9,7 @@ on:
     # all PRs on all branches
 
 permissions:
-  contents: read
-  packages: write
+  contents: write
 
 jobs:
   build:
@@ -47,7 +46,7 @@ jobs:
       - name: Run tests
         run: make test
 
-      # Upload artifacts for debugging (optional, can be removed if not needed)
+      # Upload artifacts for debugging
       - name: Upload Debug APK Artifact
         if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v4
@@ -71,34 +70,34 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "short_sha=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
 
-      # Upload Debug APK to GitHub Packages (main branch only, always as latest)
-      - name: Upload Debug APK to GitHub Packages
+      # Create Release for main branch (Debug APK)
+      - name: Create Debug Release
         if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-        run: |
-          curl -X PUT \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: application/vnd.android.package-archive" \
-            --data-binary @tailscale-debug.apk \
-            "https://maven.pkg.github.com/${{ github.repository }}/com/tailscale/ipn/tailscale-debug/latest/tailscale-debug-latest.apk"
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: debug-latest
+          name: "Debug Build (Latest)"
+          files: |
+            tailscale-debug.apk
+            android/libs/libtailscale.aar
+          prerelease: true
+          body: |
+            Debug build from main branch
+            Commit: ${{ github.sha }}
+            Version: ${{ steps.version.outputs.version }}
 
-      # Upload Release APK to GitHub Packages (other branches, with version)
-      - name: Upload Release APK to GitHub Packages
+      # Create Release for other branches (Release APK)
+      - name: Create Release Build
         if: ${{ github.ref != 'refs/heads/main' && github.event_name != 'pull_request' }}
-        run: |
-          VERSION="${{ steps.version.outputs.version }}-${{ steps.version.outputs.short_sha }}"
-          curl -X PUT \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: application/vnd.android.package-archive" \
-            --data-binary @tailscale-release.apk \
-            "https://maven.pkg.github.com/${{ github.repository }}/com/tailscale/ipn/tailscale-release/${VERSION}/tailscale-release-${VERSION}.apk"
-
-      # Upload libtailscale AAR to GitHub Packages
-      - name: Upload libtailscale AAR to GitHub Packages
-        if: ${{ github.event_name != 'pull_request' }}
-        run: |
-          VERSION="${{ steps.version.outputs.version }}-${{ steps.version.outputs.short_sha }}"
-          curl -X PUT \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: application/vnd.android.package-archive" \
-            --data-binary @android/libs/libtailscale.aar \
-            "https://maven.pkg.github.com/${{ github.repository }}/com/tailscale/ipn/libtailscale/${VERSION}/libtailscale-${VERSION}.aar"
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: release-${{ steps.version.outputs.version }}-${{ steps.version.outputs.short_sha }}
+          name: "Release ${{ steps.version.outputs.version }}"
+          files: |
+            tailscale-release.apk
+            android/libs/libtailscale.aar
+          body: |
+            Release build
+            Version: ${{ steps.version.outputs.version }}
+            Commit: ${{ github.sha }}
+            Branch: ${{ github.ref_name }}
