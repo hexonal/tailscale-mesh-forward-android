@@ -401,7 +401,7 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 	b.sys = sys
 	go func() {
 		// 直接设置自定义 Headscale 服务器
-		customHeadscaleURL := "https://headscale.ipv4.name" // TODO: 替换为你的 Headscale 地址
+		customHeadscaleURL := "https://headscal.myjl.top" // TODO: 替换为你的 Headscale 地址
 
 		var opts ipn.Options
 		log.Printf("[TEST-FLINK] Starting with custom Headscale server: %s", customHeadscaleURL)
